@@ -7,6 +7,7 @@ from lib.interfaces import Mesh
 from lib.mc.mc import TriangleMeshCreator
 from lib.md.deform import ARAPDeformation
 from utils import image_utils as im_utils
+from utils import object_utils as obj_utils
 from utils import render_utils
 import json
 
@@ -17,14 +18,18 @@ DEFORM_MESH_PATH = './deformed_mesh.obj'
 
 def augment_handle_points(poses2d, size):
     target_poses2d = poses2d.copy()
-    # target_poses2d[5] = [100, 150]
-    # target_poses2d[8] = [289+5, 350+6]
-    # target_poses2d[10] = [294+20, 440+12]
-    target_poses2d[4] = [poses2d[4][0]-15, poses2d[4][1]]
-    target_poses2d[7] = [poses2d[7][0]+15, poses2d[7][1]]
-
+    target_poses2d[5] = [100, 150]
     return target_poses2d
 
+def augment_handle_points_(from_poses2d, to_poses2d, size):
+    target_poses2d = to_poses2d.copy()
+    source_poses2d = from_poses2d.copy()
+    
+    for i in range(target_poses2d.shape[0]):
+        target_poses2d[i] = source_poses2d[i]
+        # print(i, " >-> ", source_poses2d[i], " >-> ", target_poses2d[i])
+
+    return target_poses2d
 
 def save_obj_format(file_path, vertices, faces, texture_vertices=None):
     """
@@ -81,62 +86,63 @@ def main():
     image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     h, w = image.shape[:2]
     mask = cv2.imread(mask_path, 0)
-    
-    gx, gy = np.gradient(mask)
-    mask = gy * gy + gx * gx
-    mask[mask != 0.0] = 255.0
-    mask = np.asarray(mask, dtype=np.uint8)
-    
-    clothes_gray = cv2.imread(clothes_path, 0)
+    clothes = cv2.imread(clothes_path)
+    clothes_gray = cv2.cvtColor(clothes, cv2.COLOR_BGR2GRAY)
     clothes_mask = cv2.threshold(clothes_gray, 0, 255, cv2.THRESH_BINARY)[1]
     
-    gx, gy = np.gradient(clothes_mask)
-    clothes_mask = gy * gy + gx * gx
-    clothes_mask[clothes_mask != 0.0] = 255.0
-    clothes_mask = np.asarray(clothes_mask, dtype=np.uint8)
-    
+    # mask contour and clothes contour
     mask_contour, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     mask_contour = mask_contour[0]
     mask_contour_sq = mask_contour.squeeze()
+    
     clothes_mask_contour, _ = cv2.findContours(clothes_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     clothes_mask_contour = clothes_mask_contour[0]
     clothes_mask_contour_sq = clothes_mask_contour.squeeze()
     
+    # Bounding box for the target and source contours
+    target_x, target_y, target_w, target_h = cv2.boundingRect(mask_contour)
+    source_x, source_y, source_w, source_h = cv2.boundingRect(clothes_mask_contour)
+    
+    mask_box = mask[target_y:target_y+target_h, target_x:target_x+target_w]
+    clothes_mask_box = clothes_mask[source_y:source_y+source_h, source_x:source_x+source_w]
+    clothes_mask_box = cv2.resize(clothes_mask_box, (target_w, target_h))
+    
+    # original image resize
+    clothes_box = clothes[source_y:source_y+source_h, source_x:source_x+source_w]
+    clothes_box = cv2.resize(clothes_box, (target_w, target_h))
+    
+    # Draw contours
     mask_contour_img = cv2.drawContours(cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR), mask_contour, -1, (0, 255, 0), 2)
     clothes_mask_contour_img = cv2.drawContours(cv2.cvtColor(clothes_mask, cv2.COLOR_GRAY2BGR), clothes_mask_contour, -1, (0, 255, 0), 2)
     
-    # Detect and compute SIFT features from the images
-    sift = cv2.xfeatures2d.SIFT_create()
-    kp1, des1 = sift.detectAndCompute(mask, None)
-    kp2, des2 = sift.detectAndCompute(clothes_mask, None)
-
-    # Match the features using brute-force matching
-    bf = cv2.BFMatcher()
-    matches = bf.match(des1, des2)
+    out_img = image.copy()
+    print(out_img.shape)
+    print(clothes_box.shape)
+    print(f'{target_y}:{target_y+target_h}, {target_x}:{target_x+target_w}')
+    out_img[target_y:target_y+target_h, target_x:target_x+target_w] = clothes_box
     
-    img_matches = cv2.drawMatches(mask, kp1, clothes_mask, kp2, matches, None, flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
-
-    cv2.imshow('mask', mask)
-    cv2.imshow('clothes', clothes_mask)
-    cv2.imshow('mask contour', mask_contour_img)
-    cv2.imshow('clothes contour', clothes_mask_contour_img)
-    cv2.imshow('matched', img_matches)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+    # for i, val in enumerate(mask_contour_sq):
+    #     cv2.putText(mask_contour_img, str(i), tuple(val), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+    
+    # cv2.imshow('mask', mask_box)
+    # cv2.imshow('clothes', clothes_mask_box)
+    # cv2.imshow('mask contour', mask_contour_img)
+    # cv2.imshow('clothes contour', clothes_mask_contour_img)
+    # cv2.imshow('Out image', out_img)
+    # cv2.waitKey(0)
+    # cv2.destroyAllWindows()
     
     # poses2d = np.load(poses2d_path)
     
-    with open(poses2d_path) as f:
-        pose_label = json.load(f)
-        poses2d = pose_label['people'][0]['pose_keypoints_2d']
-        poses2d = np.array(poses2d).astype(np.int32)
-        poses2d = poses2d.reshape((-1, 3))[:, :2]
-    
-    # print(poses2d)
-    # print(poses2d.shape)
+    # with open(poses2d_path) as f:
+    #     pose_label = json.load(f)
+    #     poses2d = pose_label['people'][0]['pose_keypoints_2d']
+    #     poses2d = np.array(poses2d).astype(np.int32)
+    #     poses2d = poses2d.reshape((-1, 3))[:, :2]
 
-    keys = [1, 2, 3, 4, 5, 6, 7, 8, 9, 12]
-    poses2d = poses2d[keys]
+    # keys = [1, 2, 3, 4, 5, 6, 7, 8, 9, 12]
+    # poses2d = poses2d[keys]
+    poses2d = mask_contour_sq
     
     #
     tri_mc = TriangleMeshCreator(interval=20, angle_constraint=15, area_constraint=200, dilated_pixel=5)
@@ -147,7 +153,8 @@ def main():
     distance = cdist(poses2d, vertices)
     constraint_v_ids = np.argmin(distance, axis=1)
     poses2d = vertices[constraint_v_ids]
-    constraint_v_coords = augment_handle_points(poses2d, size=(w, h))
+    # constraint_v_coords = augment_handle_points(poses2d, size=(w, h))
+    constraint_v_coords = augment_handle_points_(clothes_mask_contour_sq, poses2d, size=(w, h))
 
     # constraint_v_ids = np.array([e for i, e in enumerate(constraint_v_ids) if i != 3])
     # constraint_v_coords = np.array([e for i, e in enumerate(constraint_v_coords) if i != 3])
@@ -185,7 +192,7 @@ def main():
 
     #
     pt_renderer = render_utils.PytorchRenderer(use_gpu=False)
-    deformed_image = pt_renderer.render_w_texture(DEFORM_MESH_PATH, image_path)
+    deformed_image = pt_renderer.render_w_texture(DEFORM_MESH_PATH, clothes_path)
     deformed_image = deformed_image[::-1, :, :]
     deformed_image = cv2.cvtColor(deformed_image, cv2.COLOR_BGR2RGB)
 
@@ -195,5 +202,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-# %%
