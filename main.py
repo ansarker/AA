@@ -114,23 +114,30 @@ def main():
     # Draw contours
     mask_contour_img = cv2.drawContours(cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR), mask_contour, -1, (0, 255, 0), 2)
     clothes_mask_contour_img = cv2.drawContours(cv2.cvtColor(clothes_mask, cv2.COLOR_GRAY2BGR), clothes_mask_contour, -1, (0, 255, 0), 2)
-    
+
     out_img = image.copy()
-    print(out_img.shape)
-    print(clothes_box.shape)
-    print(f'{target_y}:{target_y+target_h}, {target_x}:{target_x+target_w}')
-    out_img[target_y:target_y+target_h, target_x:target_x+target_w] = clothes_box
+    out_img_box = out_img[target_y:target_y+target_h, target_x:target_x+target_w]
     
-    # for i, val in enumerate(mask_contour_sq):
-    #     cv2.putText(mask_contour_img, str(i), tuple(val), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+    # Create 3-channel mask of float datatype
+    alpha = cv2.cvtColor(clothes_mask_box, cv2.COLOR_GRAY2BGR)/255.0
+
+    # Perform blending and limit pixel values to 0-255
+    blended = cv2.convertScaleAbs(out_img_box * (1-alpha) + clothes_box * alpha)
     
+    # out_img[target_y:target_y+target_h, target_x:target_x+target_w] = clothes_box
+    out_img[target_y:target_y+target_h, target_x:target_x+target_w] = blended
+    
+    # compare two contours and get the matched values
+    threshold = 100
+    matched_values, matched_indices = obj_utils.compare_arrays(clothes_mask_contour, mask_contour, threshold)
+    matched_values = np.expand_dims(matched_values, axis=1)
+
     # cv2.imshow('mask', mask_box)
     # cv2.imshow('clothes', clothes_mask_box)
-    # cv2.imshow('mask contour', mask_contour_img)
     # cv2.imshow('clothes contour', clothes_mask_contour_img)
-    # cv2.imshow('Out image', out_img)
-    # cv2.waitKey(0)
-    # cv2.destroyAllWindows()
+    cv2.imshow('Out image', out_img)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
     
     # poses2d = np.load(poses2d_path)
     
@@ -140,9 +147,7 @@ def main():
     #     poses2d = np.array(poses2d).astype(np.int32)
     #     poses2d = poses2d.reshape((-1, 3))[:, :2]
 
-    # keys = [1, 2, 3, 4, 5, 6, 7, 8, 9, 12]
-    # poses2d = poses2d[keys]
-    poses2d = mask_contour_sq
+    poses2d = matched_values.squeeze()
     
     #
     tri_mc = TriangleMeshCreator(interval=20, angle_constraint=15, area_constraint=200, dilated_pixel=5)
