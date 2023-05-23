@@ -2,8 +2,6 @@ import cv2
 import time
 import numpy as np
 from scipy.spatial.distance import cdist
-import math
-import random
 
 from lib.interfaces import Mesh
 from lib.mc.mc import TriangleMeshCreator
@@ -11,8 +9,6 @@ from lib.md.deform import ARAPDeformation
 from utils import image_utils as im_utils
 from utils import object_utils as obj_utils
 from utils import render_utils
-from utils.shape_context import ShapeContext
-from utils.tps import TPS
 import json
 
 
@@ -25,12 +21,13 @@ def augment_handle_points(poses2d, size):
     target_poses2d[5] = [100, 150]
     return target_poses2d
 
-def augment_handle_points_(lines, size):
-    target_poses2d = np.zeros((len(lines), 2), dtype=np.int32)
+def augment_handle_points_(from_poses2d, to_poses2d, size):
+    target_poses2d = to_poses2d.copy()
+    source_poses2d = from_poses2d.copy()
     
-    for i in range(len(lines)):
-        target_poses2d[i] = lines[i][1]
-    
+    for i in range(target_poses2d.shape[0]):
+        target_poses2d[i] = source_poses2d[i]
+
     return target_poses2d
 
 def save_obj_format(file_path, vertices, faces, texture_vertices=None):
@@ -75,52 +72,25 @@ def save_obj_format(file_path, vertices, faces, texture_vertices=None):
 
 
 def main():
-    target_model_path = "./data/osim.jpg"
-    target_mask_path = "./data/osim.png"
+    # image_path = "./data/image_alok.png"
+    # mask_path = "./data/mask_alok.png"
+    # poses2d_path = "./data/poses2d.npy"
+    image_path = "./data/osim.jpg"
+    mask_path = "./data/osim.png"
     clothes_path = "./data/align_shirt.png"
     poses2d_path = "./data/osim_keypoints.json"
 
-    target_model_image = cv2.imread(target_model_path)
-    target_model_image = cv2.cvtColor(target_model_image, cv2.COLOR_BGR2RGB)
-    h, w = target_model_image.shape[:2]
-    target_clothes_mask = cv2.imread(target_mask_path, 0)
+    #
+    image = cv2.imread(image_path)
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    h, w = image.shape[:2]
+    mask = cv2.imread(mask_path, 0)
     clothes = cv2.imread(clothes_path)
     clothes_gray = cv2.cvtColor(clothes, cv2.COLOR_BGR2GRAY)
     clothes_mask = cv2.threshold(clothes_gray, 0, 255, cv2.THRESH_BINARY)[1]
     
-    sc = ShapeContext()
-    sampls = 300
-    rotate = False
-    
-    points1, t1 = sc.get_points_from_img(target_clothes_mask, simpleto=sampls)
-    points2, t2 = sc.get_points_from_img(clothes_mask, simpleto=sampls)
-
-    if rotate:
-        # https://docs.opencv.org/3.0-beta/doc/py_tutorials/py_imgproc/py_geometric_transformations/py_geometric_transformations.html
-        theta = np.radians(90)
-        c, s = np.cos(theta), np.sin(theta)
-        R = np.matrix('{} {}; {} {}'.format(c, -s, s, c))
-        points2 = np.dot(np.array(points2), R).tolist()
-
-    P = sc.compute(points1)
-    x1 = [p[1] for p in points1]
-    y1 = [p[0] for p in points1]
-    Q = sc.compute(points2)
-    x2 = [p[1] for p in points2]
-    y2 = [p[0] for p in points2]
-
-    standard_cost,indexes = sc.diff(P,Q)
-
-    lines = []
-    matched_values = []
-    for p,q in indexes:
-        distance = math.sqrt(((points1[p][0]-points2[q][0])**2)+((points1[p][1]-points2[q][1])**2))
-        if distance < standard_cost:
-            lines.append(((points1[p][1],points1[p][0]), (points2[q][1],points2[q][0])))
-            matched_values.append((points1[p][1],points1[p][0]))
-    
-    # target_clothes_mask contour and clothes contour
-    mask_contour, _ = cv2.findContours(target_clothes_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # mask contour and clothes contour
+    mask_contour, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     mask_contour = mask_contour[0]
     mask_contour_sq = mask_contour.squeeze()
     
@@ -132,22 +102,22 @@ def main():
     target_x, target_y, target_w, target_h = cv2.boundingRect(mask_contour)
     source_x, source_y, source_w, source_h = cv2.boundingRect(clothes_mask_contour)
     
-    mask_box = target_clothes_mask[target_y:target_y+target_h, target_x:target_x+target_w]
+    mask_box = mask[target_y:target_y+target_h, target_x:target_x+target_w]
     clothes_mask_box = clothes_mask[source_y:source_y+source_h, source_x:source_x+source_w]
     clothes_mask_box = cv2.resize(clothes_mask_box, (target_w, target_h))
     
-    # original target_model_image resize
+    # original image resize
     clothes_box = clothes[source_y:source_y+source_h, source_x:source_x+source_w]
     clothes_box = cv2.resize(clothes_box, (target_w, target_h))
     
     # Draw contours
-    mask_contour_img = cv2.drawContours(cv2.cvtColor(target_clothes_mask, cv2.COLOR_GRAY2BGR), mask_contour, -1, (0, 255, 0), 2)
+    mask_contour_img = cv2.drawContours(cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR), mask_contour, -1, (0, 255, 0), 2)
     clothes_mask_contour_img = cv2.drawContours(cv2.cvtColor(clothes_mask, cv2.COLOR_GRAY2BGR), clothes_mask_contour, -1, (0, 255, 0), 2)
 
-    out_img = target_model_image.copy()
+    out_img = image.copy()
     out_img_box = out_img[target_y:target_y+target_h, target_x:target_x+target_w]
     
-    # Create 3-channel target_clothes_mask of float datatype
+    # Create 3-channel mask of float datatype
     alpha = cv2.cvtColor(clothes_mask_box, cv2.COLOR_GRAY2BGR)/255.0
 
     # Perform blending and limit pixel values to 0-255
@@ -156,45 +126,55 @@ def main():
     # out_img[target_y:target_y+target_h, target_x:target_x+target_w] = clothes_box
     out_img[target_y:target_y+target_h, target_x:target_x+target_w] = blended
     
-    poses2d = np.array(matched_values)
+    # compare two contours and get the matched values
+    threshold = 30
+    matched_values, matched_indices = obj_utils.compare_arrays(clothes_mask_contour, mask_contour, threshold)
+    matched_values = np.expand_dims(matched_values, axis=1)
 
+    # cv2.imshow('mask', mask_box)
+    # cv2.imshow('clothes', clothes_mask_box)
+    # cv2.imshow('clothes contour', clothes_mask_contour_img)
+    cv2.imshow('Out image', out_img)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+    
+    # poses2d = np.load(poses2d_path)
+    
+    # with open(poses2d_path) as f:
+    #     pose_label = json.load(f)
+    #     poses2d = pose_label['people'][0]['pose_keypoints_2d']
+    #     poses2d = np.array(poses2d).astype(np.int32)
+    #     poses2d = poses2d.reshape((-1, 3))[:, :2]
+
+    poses2d = matched_values.squeeze()
+    
+    #
     tri_mc = TriangleMeshCreator(interval=20, angle_constraint=15, area_constraint=200, dilated_pixel=5)
-    mesh = tri_mc.create(target_model_image, target_clothes_mask)
+    mesh = tri_mc.create(image, mask)
 
+    #
     vertices = 0.5 * (mesh.vertices + 1) * np.array([w, h]).reshape((1, 2)).astype(np.float32)
     distance = cdist(poses2d, vertices)
     constraint_v_ids = np.argmin(distance, axis=1)
     poses2d = vertices[constraint_v_ids]
-    
-    constraint_v_coords = augment_handle_points_(lines, size=(w, h))
+    # constraint_v_coords = augment_handle_points(poses2d, size=(w, h))
+    constraint_v_coords = augment_handle_points_(clothes_mask_contour_sq, poses2d, size=(w, h))
 
     # constraint_v_ids = np.array([e for i, e in enumerate(constraint_v_ids) if i != 3])
     # constraint_v_coords = np.array([e for i, e in enumerate(constraint_v_coords) if i != 3])
 
-    l2 = []
     if VISUALIZE:
         vis_image = mesh.get_image()
         vis_image = cv2.cvtColor(vis_image, cv2.COLOR_GRAY2BGR)
-        
-        for i, (x, y) in enumerate(lines):
-            cv2.circle(vis_image, x, radius=3, color=(255, 0, 0), thickness=1)
-            l2.append(x)
+        for x, y in poses2d.astype(np.int32):
+            cv2.circle(vis_image, (x, y), radius=3, color=(255, 0, 0), thickness=2)
 
         for x, y in constraint_v_coords.astype(np.int32):
-            cv2.circle(vis_image, (x, y), radius=3, color=(0, 255, 0), thickness=1)
-            
-        for i in range(len(lines)):
-            cv2.line(vis_image, lines[i][0], constraint_v_coords[i].astype(np.int32), (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255)), 1)
+            cv2.circle(vis_image, (x, y), radius=3, color=(0, 255, 0), thickness=2)
 
         im_utils.imshow(vis_image)
-    
-    # new_image, matches = obj_utils.WarpImage_TPS(source=constraint_v_coords, target=np.array(l2), img=clothes)
-    new_image, matches = obj_utils.thin_plate_spline_warp(constraint_v_coords, np.array(l2), clothes[:,:,0])
-    
-    cv2.imshow('new_image', new_image)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
-    
+
+    #
     constraint_v_coords = Mesh.normalize_vertices(constraint_v_coords, size=(w, h))
 
     # build vertices texture
