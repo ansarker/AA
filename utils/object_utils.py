@@ -81,136 +81,146 @@ def WarpImage_TPS(source, target, img):
     
     return new_img, matches
 
-# try thin plate spline warping
-def thin_plate_spline_warp(warped_pts, ctrl_pts, obj_to_warp):
+def tps_trans(p1,p2,gray,tps_lambda = 0.2):
+    '''
+    Thin-Plate Spline Transform Algorithm 
 
-    # convert everything to np array
-    warped_pts = np.array(warped_pts)
-    ctrl_pts = np.array(ctrl_pts)
-    obj_to_warp = np.array(obj_to_warp)
+    input:
+        p1 : feature points in the image to be transformed
+        p2 : target feature points
+        gray : input image
+        tps_lambda : a tps parameter
+    output:
+        out_img : transformed input image
+        new : transformed mark image, where shows transformed p1 points 
+                (as cv2.applyTransformation() cannot work properly)
+    '''
+    p1 = p1.reshape(-1, len(p1), 2)
+    p2 = p2.reshape(-1, len(p2), 2)
+    
+    tps = cv2.createThinPlateSplineShapeTransformer()
+    tps.setRegularizationParameter(tps_lambda)
+    matches = []
+    new = np.zeros_like(gray)
+    for i in range(0,len(p1[0])):
+        matches.append(cv2.DMatch(i,i,0))
+        # cv2.circle(new,[int(p1[0][i][0]),int(p1[0][i][1])],1,(1,0,0),-1)
+    
+    print(type(p2))
+    print(p2.shape)
+    tps.estimateTransformation(p2, p1, matches)
 
-    num_points = warped_pts.shape[0]
-    K = np.zeros((num_points, num_points))
-    for rr in np.arange(num_points):
-        for cc in np.arange(num_points):
-            K[rr,cc] = np.sum(np.subtract(warped_pts[rr,:], warped_pts[cc,:])**2) #R**2 
-            K[cc,rr] = K[rr,cc]
+    out_img = tps.warpImage(gray)
+    print(tps.applyTransformation(p1))
+    return out_img
 
-    #calculate kernel function R
-    K = np.maximum(K, 1e-320) 
-    #K = K.* log(sqrt(K))
-    K = np.sqrt(K) #
-    # Calculate P matrix
-    P = np.hstack((np.ones((num_points, 1)), warped_pts)) #nX4 for 3D
-    # Calculate L matrix
-    L_top = np.hstack((K, P))
-    L_bot = np.hstack((P.T, np.zeros((4,4))))
-    L = np.vstack((L_top, L_bot))
 
-    param = np.matmul(np.linalg.pinv(L), np.vstack((ctrl_pts, np.zeros((4,3)))))
-    # Calculate new coordinates (x',y',z') for each points 
-    num_points_obj = obj_to_warp.shape[0]
+def triangles(points):
+    points = np.where(points, points, 1)
+    subdiv = cv2.Subdiv2D((*points.min(0), *points.max(0)))
+    for pt in points:
+        subdiv.insert(tuple(map(int, pt)))
+    for pts in subdiv.getTriangleList().reshape(-1, 3, 2):
+        yield [np.where(np.all(points == pt, 1))[0][0] for pt in pts]
 
-    K = np.zeros((num_points_obj, num_points))
-    gx = obj_to_warp[:,0]
-    gy = obj_to_warp[:,1]
-    gz = obj_to_warp[:,2]
+def crop(img, pts):
+    x, y, w, h = cv2.boundingRect(pts)
+    img_cropped = img[y: y + h, x: x + w]
+    pts[:, 0] -= x
+    pts[:, 1] -= y
+    return img_cropped, pts
 
-    for nn in np.arange(num_points):
-        K[:,nn] = np.square(np.subtract(gx, warped_pts[nn,0])) + \
-        np.square(np.subtract(gy, warped_pts[nn,1])) + \
-        np.square(np.subtract(gz, warped_pts[nn,2])) # R**2
- 
-    K = np.maximum(K, 1e-320) 
-    K = np.sqrt(K) #|R| for 3D
-    gx = np.vstack(obj_to_warp[:,0])
-    gy = np.vstack(obj_to_warp[:,1])
-    gz = np.vstack(obj_to_warp[:,2])
-    P = np.hstack((np.ones((num_points_obj,1)), gx, gy, gz))
-    L = np.hstack((K, P))
-    object_warped = np.matmul(L, param)
-    object_warped[:,0] = np.round(object_warped[:,0]*10**3)*10**-3
-    object_warped[:,1] = np.round(object_warped[:,1]*10**3)*10**-3
-    object_warped[:,2] = np.round(object_warped[:,2]*10**3)*10**-3
+def warp(img1, img2, pts1, pts2):
+    img1 = cv2.cvtColor(img1, cv2.COLOR_RGB2RGBA)
+    # img1 = np.zeros_like(img1)
+    img2 = img2.copy()
+    img2 = cv2.cvtColor(img2, cv2.COLOR_RGB2RGBA)
 
-    return object_warped
+    for indices in triangles(pts1):
+        img1_cropped, triangle1 = crop(img1, pts1[indices])
+        img2_cropped, triangle2 = crop(img2, pts2[indices])
+        transform = cv2.getAffineTransform(np.float32(triangle1), np.float32(triangle2))
+        img2_warped = cv2.warpAffine(img1_cropped, transform, img2_cropped.shape[:2][::-1], None, cv2.INTER_LINEAR, cv2.BORDER_REFLECT_101)
+        mask = np.zeros_like(img2_cropped)
+        cv2.fillConvexPoly(mask, np.int32(triangle2), (1, 1, 1), 50, 0)
+        img2_cropped *= 1 - mask
+        img2_cropped += img2_warped * mask
+    
+    # Slice of alpha channel
+    alpha = img2[:, :, 3]
+    # Use logical indexing to set alpha channel to 0 where BGR=0
+    alpha[np.all(img2[:, :, 0:3] == (0, 0, 0), 2)] = 0
+    cv2.imwrite(f'./cl/img2.png', img2)
+    
+    return img2
 
-# test tpsw
 if __name__ == "__main__":
-    warped_pts = [[1,2,3], [4,5,6], [7,8,9]]
-    ctrl_pts = [[0,0,0], [1,2,3], [6,3,1]]
-    obj_to_warp = [[3,2,5], [3,7,3]]
-
-    coords = thin_plate_spline_warp(warped_pts, ctrl_pts, obj_to_warp)
-    print(coords)
-
-# if __name__ == "__main__":
-#     target_mask = cv2.imread('data/osim.png', cv2.IMREAD_GRAYSCALE)
-#     source = cv2.imread('data/align_shirt.png', cv2.IMREAD_GRAYSCALE)
-#     source_mask = cv2.threshold(source, 0, 255, cv2.THRESH_BINARY)[1]
+    target_mask = cv2.imread('data/osim.png', cv2.IMREAD_GRAYSCALE)
+    source = cv2.imread('data/align_shirt.png', cv2.IMREAD_GRAYSCALE)
+    source_mask = cv2.threshold(source, 0, 255, cv2.THRESH_BINARY)[1]
             
-#     # Find contours in the source and target masks
-#     target_contour, _ = cv2.findContours(target_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-#     source_contour, _ = cv2.findContours(source_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # Find contours in the source and target masks
+    target_contour, _ = cv2.findContours(target_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    source_contour, _ = cv2.findContours(source_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-#     target_contour = target_contour[0]
-#     source_contour = source_contour[0]
+    target_contour = target_contour[0]
+    source_contour = source_contour[0]
     
-#     # target_contour = resample_contour(target_contour, 20)
-#     # print(target_contour)
-#     print(target_contour.shape)
-#     print(source_contour.shape)
+    # target_contour = resample_contour(target_contour, 20)
+    # print(target_contour)
+    print(target_contour.shape)
+    print(source_contour.shape)
     
-#     threshold = 30
-#     matched_values, matched_indices = compare_arrays(source_contour, target_contour, threshold)
-#     matched_values = np.expand_dims(matched_values, axis=1)
+    threshold = 30
+    matched_values, matched_indices = compare_arrays(source_contour, target_contour, threshold)
+    matched_values = np.expand_dims(matched_values, axis=1)
 
-#     # Bounding box for the target and source contours
-#     target_x, target_y, target_w, target_h = cv2.boundingRect(target_contour)
-#     source_x, source_y, source_w, source_h = cv2.boundingRect(source_contour)
+    # Bounding box for the target and source contours
+    target_x, target_y, target_w, target_h = cv2.boundingRect(target_contour)
+    source_x, source_y, source_w, source_h = cv2.boundingRect(source_contour)
     
-#     target_mask_box = target_mask[target_y:target_y+target_h, target_x:target_x+target_w]
-#     source_mask_box = source_mask[source_y:source_y+source_h, source_x:source_x+source_w]
+    target_mask_box = target_mask[target_y:target_y+target_h, target_x:target_x+target_w]
+    source_mask_box = source_mask[source_y:source_y+source_h, source_x:source_x+source_w]
     
-#     # Resize contours to have the same number of points
-#     source_mask_box = cv2.resize(source_mask_box, (target_w, target_h))
+    # Resize contours to have the same number of points
+    source_mask_box = cv2.resize(source_mask_box, (target_w, target_h))
     
-#     # Difference between two images
-#     diff = cv2.absdiff(target_mask_box, source_mask_box)
+    # Difference between two images
+    diff = cv2.absdiff(target_mask_box, source_mask_box)
     
-#     # Visualize the contours
-#     source_contour_vis = cv2.drawContours(np.zeros_like(source_mask), source_contour, -1, (255, 0, 0), 2)
-#     target_contour_vis = cv2.drawContours(np.zeros_like(target_mask), target_contour, -1, (255, 0, 0), 2)
+    # Visualize the contours
+    source_contour_vis = cv2.drawContours(np.zeros_like(source_mask), source_contour, -1, (255, 0, 0), 2)
+    target_contour_vis = cv2.drawContours(np.zeros_like(target_mask), target_contour, -1, (255, 0, 0), 2)
         
-#     # Crop contours area
-#     source_contour_box = source_contour_vis[source_y:source_y+source_h, source_x:source_x+source_w]
-#     target_contour_box = target_contour_vis[target_y:target_y+target_h, target_x:target_x+target_w]
+    # Crop contours area
+    source_contour_box = source_contour_vis[source_y:source_y+source_h, source_x:source_x+source_w]
+    target_contour_box = target_contour_vis[target_y:target_y+target_h, target_x:target_x+target_w]
     
-#     # Resize contours to have the same number of points
-#     source_contour_box = cv2.resize(source_contour_box, (target_w, target_h))
+    # Resize contours to have the same number of points
+    source_contour_box = cv2.resize(source_contour_box, (target_w, target_h))
     
-#     # Difference between two contours
-#     contour_diff = cv2.absdiff(target_contour_box, source_contour_box)
+    # Difference between two contours
+    contour_diff = cv2.absdiff(target_contour_box, source_contour_box)
     
-#     # Matched contours
-#     matched_contour = np.zeros_like(source_mask)
-#     cv2.drawContours(matched_contour, matched_values, -1, (255, 0, 0), 2)
-#     matched_contour = matched_contour[target_y:target_y+target_h, target_x:target_x+target_w]
+    # Matched contours
+    matched_contour = np.zeros_like(source_mask)
+    cv2.drawContours(matched_contour, matched_values, -1, (255, 0, 0), 2)
+    matched_contour = matched_contour[target_y:target_y+target_h, target_x:target_x+target_w]
     
-#     fig, axs = plt.subplots(2, 3, figsize=(15, 15))
-#     axs[0, 0].imshow(source_mask_box, cmap='gray')
-#     axs[0, 0].set_title('Source')
-#     axs[0, 1].imshow(target_mask_box, cmap='gray')
-#     axs[0, 1].set_title('Target')
-#     axs[0, 2].imshow(diff, cmap='gray')
-#     axs[0, 2].set_title('Difference')
+    fig, axs = plt.subplots(2, 3, figsize=(15, 15))
+    axs[0, 0].imshow(source_mask_box, cmap='gray')
+    axs[0, 0].set_title('Source')
+    axs[0, 1].imshow(target_mask_box, cmap='gray')
+    axs[0, 1].set_title('Target')
+    axs[0, 2].imshow(diff, cmap='gray')
+    axs[0, 2].set_title('Difference')
     
-#     axs[1, 0].imshow(source_contour_box, cmap='gray')
-#     axs[1, 0].set_title('Source Contour')
-#     axs[1, 1].imshow(target_contour_box, cmap='gray')
-#     axs[1, 1].set_title('Target Contour')
-#     # axs[1, 2].imshow(contour_diff, cmap='gray')
-#     # axs[1, 2].set_title('Contour Difference')
-#     axs[1, 2].imshow(matched_contour, cmap='gray')
-#     axs[1, 2].set_title('Matched')
-#     plt.show()
+    axs[1, 0].imshow(source_contour_box, cmap='gray')
+    axs[1, 0].set_title('Source Contour')
+    axs[1, 1].imshow(target_contour_box, cmap='gray')
+    axs[1, 1].set_title('Target Contour')
+    # axs[1, 2].imshow(contour_diff, cmap='gray')
+    # axs[1, 2].set_title('Contour Difference')
+    axs[1, 2].imshow(matched_contour, cmap='gray')
+    axs[1, 2].set_title('Matched')
+    plt.show()
