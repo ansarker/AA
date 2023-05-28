@@ -8,32 +8,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import random
 
-def procrustes_analysis(source_points, target_points):
-    # Convert to float data type
-    source_points = source_points.astype(np.float64)
-    target_points = target_points.astype(np.float64)
-
-    # Center the points
-    source_centroid = np.mean(source_points, axis=0)
-    target_centroid = np.mean(target_points, axis=0)
-    source_points -= source_centroid
-    target_points -= target_centroid
-
-    # Scale the points
-    source_norm = np.linalg.norm(source_points)
-    target_norm = np.linalg.norm(target_points)
-    source_points /= source_norm
-    target_points /= target_norm
-
-    # Compute the rotation matrix
-    u, _, vt = np.linalg.svd(np.dot(source_points.T, target_points))
-    R = np.dot(u, vt)
-
-    # Apply the transformation to the source points
-    transformed_points = np.dot(source_points, R) + target_centroid
-
-    return transformed_points
-
 def find_nearest_neighbors(source_array, target_array):
     # Flatten the arrays to 2 dimensions for nearest neighbor search
     source_flattened = source_array.reshape(-1, 2)
@@ -63,24 +37,6 @@ def compare_arrays(source_array, target_array, threshold):
     
     return matched_values, matched_indices
 
-def WarpImage_TPS(source, target, img):
-    tps = cv2.createThinPlateSplineShapeTransformer()
-        
-    source=source.reshape(-1, len(source), 2)
-    target=target.reshape(-1, len(target), 2)
-    
-    matches=list()
-    
-    for i in range(0,len(source[0])):
-        matches.append(cv2.DMatch(i,i,0))
-    
-    matches = sorted(matches, key=lambda x: x.distance)
-
-    tps.estimateTransformation(target, source, matches)
-    new_img = tps.warpImage(img)
-    
-    return new_img, matches
-
 def tps_trans(p1,p2,gray,tps_lambda = 0.2):
     '''
     Thin-Plate Spline Transform Algorithm 
@@ -106,8 +62,6 @@ def tps_trans(p1,p2,gray,tps_lambda = 0.2):
         matches.append(cv2.DMatch(i,i,0))
         # cv2.circle(new,[int(p1[0][i][0]),int(p1[0][i][1])],1,(1,0,0),-1)
     
-    print(type(p2))
-    print(p2.shape)
     tps.estimateTransformation(p2, p1, matches)
 
     out_img = tps.warpImage(gray)
@@ -131,10 +85,7 @@ def crop(img, pts):
     return img_cropped, pts
 
 def warp(img1, img2, pts1, pts2):
-    img1 = cv2.cvtColor(img1, cv2.COLOR_RGB2RGBA)
-    # img1 = np.zeros_like(img1)
-    img2 = img2.copy()
-    img2 = cv2.cvtColor(img2, cv2.COLOR_RGB2RGBA)
+    img2 = np.zeros_like(img1)
 
     for indices in triangles(pts1):
         img1_cropped, triangle1 = crop(img1, pts1[indices])
@@ -146,13 +97,52 @@ def warp(img1, img2, pts1, pts2):
         img2_cropped *= 1 - mask
         img2_cropped += img2_warped * mask
     
-    # Slice of alpha channel
-    alpha = img2[:, :, 3]
-    # Use logical indexing to set alpha channel to 0 where BGR=0
-    alpha[np.all(img2[:, :, 0:3] == (0, 0, 0), 2)] = 0
-    cv2.imwrite(f'./cl/img2.png', img2)
-    
     return img2
+
+def remove_fringe(img):
+    h, w = img.shape[:2]
+
+    # create zeros mask 2 pixels larger in each dimension
+    mask = np.zeros([h + 2, w + 2], np.uint8)
+
+    # floodfill background with black
+    floodfill = cv2.floodFill(img, mask, (0,0), (0,0,0), (1), (0), flags=8)[1]
+
+    # make all other colors but black into white
+    mask = floodfill.copy()
+    mask = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
+    mask[mask!=0] = 255
+
+    # erode mask
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3,3))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_ERODE, kernel)
+
+    # use mask to change background to white
+    result = img.copy()
+    result[mask==0] = 255
+    
+    # save cropped image
+    cv2.imwrite('./cl/food_floodfilled.jpg',floodfill)
+    cv2.imwrite('./cl/food_mask.jpg',mask)
+    cv2.imwrite('./cl/food_processed.jpg',result)
+
+    # show the images
+    #cv2.imshow("thresh", thresh)
+    cv2.imshow("floodfill", floodfill)
+    cv2.imshow("mask", mask)
+    cv2.imshow("result", result)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+    
+    return result
+
+def max_contour(contours):
+    if len(contours) != 0:
+        # find the biggest countour (c) by the area
+        max_c = max(contours, key = cv2.contourArea)
+        x, y, w, h = cv2.boundingRect(max_c)
+
+        return max_c, (x, y, w, h)
 
 if __name__ == "__main__":
     target_mask = cv2.imread('data/osim.png', cv2.IMREAD_GRAYSCALE)

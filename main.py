@@ -4,6 +4,7 @@ import numpy as np
 from scipy.spatial.distance import cdist
 import math
 import random
+from PIL import Image
 
 from lib.interfaces import Mesh
 from lib.mc.mc import TriangleMeshCreator
@@ -75,9 +76,9 @@ def save_obj_format(file_path, vertices, faces, texture_vertices=None):
 
 
 def main():
-    target_model_path = "./data/osim.jpg"
-    target_mask_path = "./data/osim.png"
-    clothes_path = "./data/purple.png"
+    target_model_path = "./data/00000019.jpg"
+    target_mask_path = "./data/00000019_cloth.jpg"
+    clothes_path = "./data/align_shirt.png"
     poses2d_path = "./data/osim_keypoints.json"
 
     target_model_image = cv2.imread(target_model_path)
@@ -85,9 +86,11 @@ def main():
     h, w = target_model_image.shape[:2]
     target_clothes_mask = cv2.imread(target_mask_path, 0)
     # target_clothes_mask = cv2.GaussianBlur(target_clothes_mask, (5, 5), 0)
-    # target_clothes_mask = cv2.Canny(target_clothes_mask, 50, 200)
+    # target_clothes_mask = cv2.Canny(target_clothes_mask, 50, 200)    
+    target_clothes_mask = cv2.threshold(target_clothes_mask, 0, 255, cv2.THRESH_BINARY)[1]
     target_clothes_mask_contour, _ = cv2.findContours(target_clothes_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    target_clothes_mask_contour = target_clothes_mask_contour[0]
+
+    target_clothes_mask_contour, _ = obj_utils.max_contour(target_clothes_mask_contour)
     target_clothes_mask_contour_sq = target_clothes_mask_contour.squeeze()
 
     clothes = cv2.imread(clothes_path)
@@ -96,9 +99,10 @@ def main():
     # clothes_gray = cv2.Canny(clothes_gray, 50, 200)
     clothes_mask = cv2.threshold(clothes_gray, 0, 255, cv2.THRESH_BINARY)[1]
     clothes_mask_contour, _ = cv2.findContours(clothes_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    clothes_mask_contour = clothes_mask_contour[0]
-    clothes_mask_contour_sq = clothes_mask_contour.squeeze()
     
+    clothes_mask_contour, _ = obj_utils.max_contour(clothes_mask_contour)
+    clothes_mask_contour_sq = clothes_mask_contour.squeeze()
+
     # Bounding box for the target and source contours
     target_x, target_y, target_w, target_h = cv2.boundingRect(target_clothes_mask_contour)
     source_x, source_y, source_w, source_h = cv2.boundingRect(clothes_mask_contour)
@@ -107,22 +111,17 @@ def main():
     clothes_mask_box = clothes_mask[source_y:source_y+source_h, source_x:source_x+source_w]
     clothes_mask_box = cv2.resize(clothes_mask_box, (target_w, target_h))
     
-    # cv2.imshow("target clothes mask", mask_box)
-    # cv2.imshow("clothes mask", clothes_mask_box)
-    # cv2.waitKey(0)
-    # cv2.destroyAllWindows()
-    
     sc = ShapeContext()
-    sampls = 100
+    sampls = 500
     rotate = False
     
     # target_clothes_mask contour and clothes contour
     mask_contour, _ = cv2.findContours(target_clothes_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    mask_contour = mask_contour[0]
+    mask_contour, _ = obj_utils.max_contour(mask_contour)
     mask_contour_sq = mask_contour.squeeze()
     
     clothes_mask_contour, _ = cv2.findContours(clothes_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    clothes_mask_contour = clothes_mask_contour[0]
+    clothes_mask_contour, _ = obj_utils.max_contour(clothes_mask_contour)
     clothes_mask_contour_sq = clothes_mask_contour.squeeze()
     
     # Bounding box for the target and source contours
@@ -141,7 +140,6 @@ def main():
     clothes_box = cv2.resize(clothes_box, (target_w, target_h))
     # clothes_box = cv2.GaussianBlur(clothes_box, (5, 5), 0)
     # clothes_box = cv2.Canny(clothes_box, 50, 200)
-    
 
     points1, t1 = sc.get_points_from_img(mask_box, simpleto=sampls)
     points2, t2 = sc.get_points_from_img(clothes_mask_box, simpleto=sampls)
@@ -214,17 +212,23 @@ def main():
             cv2.line(black, lines[i][0], constraint_v_coords[i].astype(np.int32), (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255)), 1)
 
         # im_utils.imshow(black)
-        # cv2.imshow('target box', black)
-        # cv2.imshow('cloth box', clothes_box)
-    
-    # new_image, matches = obj_utils.WarpImage_TPS(source=constraint_v_coords, target=np.array(l2), img=clothes)
-    # new_image = obj_utils.tps_trans(p1=constraint_v_coords, p2=np.array(l2), gray=clothes)
-    target_model_image = cv2.cvtColor(target_model_image, cv2.COLOR_RGB2RGBA)
+        cv2.imshow('target box', black)
+        cv2.imshow('cloth box', clothes_box)
+        
     new_image = obj_utils.warp(img1=clothes_box, img2=target_image_box, pts1=constraint_v_coords, pts2=np.array(l2))
     
-    target_model_image[target_y:target_y+target_h, target_x:target_x+target_w] = new_image
+    # cv2.imwrite('./cl/warpedcloth.png', new_image)
+    # new_image = obj_utils.remove_fringe(new_image)
+    new_image = cv2.cvtColor(new_image, cv2.COLOR_RGB2RGBA)
+    alpha = new_image[:, :, 3]
+    alpha[np.all(new_image[:, :, 0:3] == (0, 0, 0), 2)] = 0
+    new_image = Image.fromarray(new_image).convert('RGBA')
+    target_model_image = Image.fromarray(target_model_image)
     
-    cv2.imshow('new_image', target_model_image)
+    target_model_image.paste(new_image, (target_x, target_y), new_image)
+    target_model_image = np.array(target_model_image)
+    
+    cv2.imshow('target model image', target_model_image)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
     
@@ -245,7 +249,7 @@ def main():
 
     if VISUALIZE:
         vis_image = deformed_mesh.get_image(size=(w, h))
-        im_utils.imshow(vis_image)
+        # im_utils.imshow(vis_image)
 
     #
     pt_renderer = render_utils.PytorchRenderer(use_gpu=False)
@@ -254,7 +258,7 @@ def main():
     deformed_image = cv2.cvtColor(deformed_image, cv2.COLOR_BGR2RGB)
 
     cv2.imwrite('./images/deformed.jpg', cv2.cvtColor(deformed_image, cv2.COLOR_BGR2RGB))
-    im_utils.imshow(deformed_image)
+    # im_utils.imshow(deformed_image)
 
 
 if __name__ == '__main__':
