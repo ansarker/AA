@@ -104,6 +104,26 @@ class PytorchRenderer:
 
         # return
         return textured_image
+    
+    def render_w_texture_(self, obj_path, texture_path, texture_img):
+        #
+        tmp_output_dir = "temporary_pt3d_mesh_rendering"
+        os.makedirs(tmp_output_dir, exist_ok=True)
+
+        #
+        tmp_obj_paths, _, _ = to_pt3d_format([obj_path], texture_path, tmp_output_dir)
+        tmp_obj_path = tmp_obj_paths[0]
+        image = Image.fromarray(texture_img)
+        h, w = image.height, image.width
+
+        #
+        textured_image = self.render(tmp_obj_path, (w, h))
+
+        # clean up
+        shutil.rmtree(tmp_output_dir)
+
+        # return
+        return textured_image
 
     def render(self, obj_path, img_size):
         #
