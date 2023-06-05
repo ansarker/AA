@@ -162,6 +162,7 @@ def main():
 
     # constraint_v_ids = np.array([e for i, e in enumerate(constraint_v_ids) if i != 3])
     # constraint_v_coords = np.array([e for i, e in enumerate(constraint_v_coords) if i != 3])
+    
 
     if VISUALIZE:
         vis_image = mesh.get_image()
